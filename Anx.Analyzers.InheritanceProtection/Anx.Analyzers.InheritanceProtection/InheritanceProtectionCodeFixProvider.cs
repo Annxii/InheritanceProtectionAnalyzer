@@ -15,27 +15,22 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace Anx.Analyzers.InheritanceProtection
 {
-    [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(AnxAnalyzersInheritanceProtectionCodeFixProvider)), Shared]
-    public class AnxAnalyzersInheritanceProtectionCodeFixProvider : CodeFixProvider
+    //[ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(InheritanceProtectionCodeFixProvider)), Shared]
+    public class InheritanceProtectionCodeFixProvider : CodeFixProvider
     {
-        private const string title = "Make uppercase";
+        private const string title = "Inherit from 'ViewModelBase'";
 
         public sealed override ImmutableArray<string> FixableDiagnosticIds
         {
-            get { return ImmutableArray.Create(AnxAnalyzersInheritanceProtectionAnalyzer.DiagnosticId); }
+            get { return ImmutableArray.Create(InheritanceProtectionAnalyzer.DiagnosticId); }
         }
 
-        public sealed override FixAllProvider GetFixAllProvider()
-        {
-            // See https://github.com/dotnet/roslyn/blob/master/docs/analyzers/FixAllProvider.md for more information on Fix All Providers
-            return WellKnownFixAllProviders.BatchFixer;
-        }
+        public sealed override FixAllProvider GetFixAllProvider() => null;
 
         public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
         {
             var root = await context.Document.GetSyntaxRootAsync(context.CancellationToken).ConfigureAwait(false);
 
-            // TODO: Replace the following code with your own analysis, generating a CodeAction for each fix to suggest
             var diagnostic = context.Diagnostics.First();
             var diagnosticSpan = diagnostic.Location.SourceSpan;
 
@@ -46,9 +41,34 @@ namespace Anx.Analyzers.InheritanceProtection
             context.RegisterCodeFix(
                 CodeAction.Create(
                     title: title,
-                    createChangedSolution: c => MakeUppercaseAsync(context.Document, declaration, c),
+                    createChangedDocument: c => InheritFromCorrectBaseClass(context.Document, root, declaration, c),
                     equivalenceKey: title),
-                diagnostic);
+                diagnostic
+                );
+        }
+
+        private async Task<Document> InheritFromCorrectBaseClass(Document document, SyntaxNode root, TypeDeclarationSyntax typeDecl, CancellationToken c)
+        {
+            var semanticModel = await document.GetSemanticModelAsync(c);
+            var currentBaseList = typeDecl.BaseList;
+            var baseType = currentBaseList.Types
+                .Where(x => (semanticModel.GetSymbolInfo(x.Type).Symbol as INamedTypeSymbol)?.IsInheritanceProtectionType() ?? false)
+                .FirstOrDefault();
+            
+            if(baseType != null)
+            {
+                var correctBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName("Anx.Utility.ValidViewModelImpl"))
+                    .WithLeadingTrivia(baseType.GetLeadingTrivia())
+                    .WithTrailingTrivia(baseType.GetTrailingTrivia());
+                
+                var correctedBaseList = correctBaseType.AsEnumerable<BaseTypeSyntax>().Concat(currentBaseList.Types.Skip(1));
+                var newBaseList = SyntaxFactory.BaseList(SyntaxFactory.SeparatedList(correctedBaseList));
+                var newRoot = root.ReplaceNode(currentBaseList, newBaseList);
+
+                return document.WithSyntaxRoot(newRoot);
+            }
+
+            return document;
         }
 
         private async Task<Solution> MakeUppercaseAsync(Document document, TypeDeclarationSyntax typeDecl, CancellationToken cancellationToken)
